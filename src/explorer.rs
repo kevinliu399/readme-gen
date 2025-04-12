@@ -1,22 +1,21 @@
-use core::error;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs,
-    io::{self, BufRead, BufReader},
+    io::{self, BufReader, Read},
     path::PathBuf,
 };
 use walkdir::{DirEntry, WalkDir};
 
 /// Stuff to note when traversing
 /// - The different languages, maybe a percentage and see what are the most used
-/// - Dockerfile to see more info
 /// - Skip target/, node_modules/, .git/, __pycache__/, venv/
 /// - Look for project root files like Cargo.toml, package.json
 /// Check for Liscense, Author, Project Structures
 /// Find entrypoints depending on the language
 
 // TODO: Add proper error handling
+
 struct RepoCodeContext {
     repo_name: String,
     main_language: String,
@@ -39,15 +38,27 @@ impl RepoCodeContext {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct DependencyFile {
     language: String,
+
+    #[serde(default)]
     name: String,
+
+    #[serde(default)]
     version: String,
-    scripts: Vec<String>,
+
+    #[serde(default)]
+    scripts: Option<HashMap<String, String>>,
+
+    #[serde(default)]
     description: String,
-    dependencies: Vec<String>,
-    dev_dependencies: Vec<String>,
+
+    #[serde(rename = "dependencies", default)]
+    dependencies: Option<HashMap<String, String>>,
+
+    #[serde(rename = "devDependencies", default)]
+    dev_dependencies: Option<HashMap<String, String>>,
 }
 
 impl DependencyFile {
@@ -56,11 +67,43 @@ impl DependencyFile {
             language: language,
             name: String::new(),
             version: String::new(),
-            scripts: Vec::new(),
+            scripts: None,
             description: String::new(),
-            dependencies: Vec::new(),
-            dev_dependencies: Vec::new(),
+            dependencies: None,
+            dev_dependencies: None,
         }
+    }
+
+    pub fn parse_json(file: fs::File, language: String) -> Self {
+        // TODO: change language to typescript buy looking at the dev dependencies
+        let mut dep_file: DependencyFile =
+            match serde_json::from_reader::<_, DependencyFile>(BufReader::new(file)) {
+                Ok(data) => data,
+                Err(_) => Self::new(language.clone()),
+            };
+        dep_file.language = language;
+        dep_file
+    }
+
+    pub fn parse_toml(file: fs::File, language: String) -> Self {
+        let mut reader = BufReader::new(file);
+        let mut contents = String::new();
+
+        if let Err(e) = reader.read_to_string(&mut contents) {
+            eprintln!("Error reading file: {}", e);
+            return Self::new(language);
+        }
+
+        let mut dep_file: DependencyFile = match toml::from_str(&contents) {
+            Ok(data) => data,
+            Err(e) => {
+                eprintln!("Error parsing TOML: {}", e);
+                Self::new(language.clone())
+            }
+        };
+
+        dep_file.language = language;
+        dep_file
     }
 }
 
@@ -124,25 +167,22 @@ fn is_dep_file(entry: &DirEntry) -> bool {
 }
 
 // add function signature
-fn parse_dep_file(entry: &DirEntry, repo: &mut RepoCodeContext, file_format: &str) {
-    // let f = fs::File::open(entry.path()).unwrap_or(todo!());
-    // let mut reader = BufReader::new(f);
-    // for line in reader.lines().filter_map(Result::ok) {}
-    match file_format {
-        ".json" => todo!(),
+fn parse_dep_file(entry: &DirEntry, repo: &mut RepoCodeContext, file_format: String) {
+    let f = fs::File::open(entry.path()).unwrap_or(todo!());
+    let file_extension = file_format.split(".").last().unwrap_or(todo!());
+    let dep_file: DependencyFile = match file_extension {
+        ".json" => DependencyFile::parse_json(f, "javascript".to_string()),
         ".xml" => todo!(),
-        ".toml" => todo!(),
+        ".toml" => DependencyFile::parse_toml(
+            f,
+            if file_format == "Cargo.toml" {
+                "rust".to_string()
+            } else {
+                "python".to_string()
+            },
+        ),
         ".mod" => todo!(),
         ".txt" => todo!(),
-        _ => todo!(),
-    }
-}
-
-fn parse_json_file(f: fs::File) -> DependencyFile {
-    // use serde_json
-    let mut dep_file = DependencyFile::new("javascript".to_string());
-
-    // TODO: Find dev_dep and update the language to typescript if it's there
-
-    dep_file
+        _ => todo!(), // Makefile
+    };
 }
