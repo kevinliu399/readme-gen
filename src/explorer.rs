@@ -168,10 +168,15 @@ fn is_dep_file(entry: &DirEntry) -> bool {
 
 // add function signature
 fn parse_dep_file(entry: &DirEntry, repo: &mut RepoCodeContext, file_format: String) {
-    let f = fs::File::open(entry.path()).unwrap_or(todo!());
-    let file_extension = file_format.split(".").last().unwrap_or(todo!());
-    let dep_file: DependencyFile = match file_extension {
-        ".json" => DependencyFile::parse_json(f, "javascript".to_string()),
+    let f = match fs::File::open(entry.path()) {
+        Ok(file) => file,
+        Err(e) => {
+            eprintln!("Error opening file: {}", e);
+            return;
+        }
+    };
+    let dep_file: DependencyFile = match file_format.as_str() {
+        "package.json" => DependencyFile::parse_json(f, "javascript".to_string()),
         ".xml" => todo!(),
         ".toml" => DependencyFile::parse_toml(
             f,
