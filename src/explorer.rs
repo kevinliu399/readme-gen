@@ -9,7 +9,7 @@ use std::{
 use walkdir::{DirEntry, WalkDir};
 
 #[derive(Debug)]
-enum RepoError {
+pub enum RepoError {
     Io(io::Error),
     Toml(toml::de::Error),
     Syn(syn::Error),
@@ -47,48 +47,48 @@ impl From<syn::Error> for RepoError {
 
 /// Cargo.toml
 #[derive(Deserialize, Debug)]
-struct CargoToml {
-    package: Option<CargoPackage>,
-    dependencies: Option<HashMap<String, toml::Value>>,
+pub struct CargoToml {
+    pub package: Option<CargoPackage>,
+    pub dependencies: Option<HashMap<String, toml::Value>>,
     #[serde(rename = "dev-dependencies")]
-    dev_dependencies: Option<HashMap<String, toml::Value>>,
+    pub dev_dependencies: Option<HashMap<String, toml::Value>>,
 }
 
 #[derive(Deserialize, Debug)]
-struct CargoPackage {
-    name: String,
-    version: String,
-    description: Option<String>,
+pub struct CargoPackage {
+    pub name: String,
+    pub version: String,
+    pub description: Option<String>,
 }
 
-struct FileInformation {
-    file_name: String,
-    structs: HashMap<String, Vec<String>>,
-    functions: HashMap<String, FunctionMeta>,
-    variables: Vec<String>,
-    enums: HashMap<String, Vec<String>>,
-    others: Vec<String>, // e.g. comments
+pub struct FileInformation {
+    pub file_name: String,
+    pub structs: HashMap<String, Vec<String>>,
+    pub functions: HashMap<String, FunctionMeta>,
+    pub variables: Vec<String>,
+    pub enums: HashMap<String, Vec<String>>,
+    pub others: Vec<String>, // e.g. comments
 }
 
-struct FunctionMeta {
-    params: Vec<String>,
-    returns: String,
-    visibility: String,
+pub struct FunctionMeta {
+    pub params: Vec<String>,
+    pub returns: String,
+    pub visibility: String,
 }
 
-struct RepoCodeContext {
-    repo_name: String,
-    languages: HashMap<String, usize>,
-    files: Vec<FileInformation>,
-    folders: Vec<String>,
-    dependencies: Vec<CargoToml>,
+pub struct RepoCodeContext {
+    pub repo_name: String,
+    pub languages: HashMap<String, usize>,
+    pub files: Vec<FileInformation>,
+    pub folders: Vec<String>,
+    pub dependencies: Vec<CargoToml>,
 }
 
 /// Implementation for parsing Cargo.toml
 
 impl CargoToml {
     /// Now returns a Result rather than silently printing errors.
-    fn parse(file: File) -> Result<Self, RepoError> {
+    pub fn parse(file: File) -> Result<Self, RepoError> {
         let mut reader = BufReader::new(file);
         let mut contents = String::new();
         reader.read_to_string(&mut contents)?;
@@ -98,7 +98,7 @@ impl CargoToml {
 }
 
 impl FileInformation {
-    fn new(file_name: String) -> Self {
+    pub fn new(file_name: String) -> Self {
         Self {
             file_name,
             structs: HashMap::new(),
@@ -123,7 +123,7 @@ impl RepoCodeContext {
 }
 
 impl FunctionMeta {
-    fn new(params: Vec<String>, visibility: String, returns: String) -> Self {
+    pub fn new(params: Vec<String>, visibility: String, returns: String) -> Self {
         Self {
             params,
             visibility,
@@ -245,10 +245,10 @@ fn parse_rust_file(entry: &DirEntry) -> Result<FileInformation, RepoError> {
 
 /// Main traversal logic that walks through a repository
 /// and gathers information. Returns a Result wrapping RepoCodeContext.
-fn walk_repo(dir_path: PathBuf) -> Result<RepoCodeContext, RepoError> {
+pub fn walk_repo(dir_path: PathBuf) -> Result<RepoCodeContext, RepoError> {
     let repo_name = dir_path
         .file_name()
-        .unwrap_or_default() // May be empty, but not an error in this context.
+        .unwrap_or_default()
         .to_string_lossy()
         .to_string();
     let mut repo = RepoCodeContext::new(repo_name);
