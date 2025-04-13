@@ -4,12 +4,12 @@ use serde_json;
 use std::path::PathBuf;
 
 #[derive(Serialize, Debug, Default)]
-struct LLMInput {
-    prompt_directives: String,
-    project_name: String,
-    project_language: String,
-    project_dependencies: String,
-    project_structure: Vec<String>,
+pub struct LLMInput {
+    pub prompt_directives: String,
+    pub project_name: String,
+    pub project_language: String,
+    pub project_dependencies: String,
+    pub project_structure: Vec<String>,
 }
 
 impl LLMInput {
@@ -18,7 +18,7 @@ impl LLMInput {
     }
 }
 
-fn build_input(path: PathBuf) -> Result<String, Box<dyn std::error::Error>> {
+pub fn build_input(path: PathBuf) -> Result<String, Box<dyn std::error::Error>> {
     let mut llm_input = LLMInput::default();
     let repo = explorer::walk_repo(path)?;
     llm_input.project_name = repo.repo_name;
@@ -68,7 +68,6 @@ fn build_input(path: PathBuf) -> Result<String, Box<dyn std::error::Error>> {
         llm_input.project_structure.push(file_details);
     }
 
-    // Build dependency information.
     let mut deps = Vec::new();
     for cargo in repo.dependencies {
         if let Some(pkg) = cargo.package {
