@@ -1,3 +1,4 @@
+use quote::ToTokens;
 use serde::Deserialize;
 use std::{
     collections::HashMap,
@@ -7,7 +8,7 @@ use std::{
 };
 use walkdir::{DirEntry, WalkDir};
 
-/// Cargo.toml structure
+/// Cargo.toml
 #[derive(Deserialize, Debug)]
 struct CargoToml {
     package: Option<CargoPackage>,
@@ -32,15 +33,16 @@ struct FileInformation {
     file_name: String,
     structs: HashMap<String, Vec<String>>,
     functions: HashMap<String, Vec<String>>,
-    variables: HashMap<String, Vec<String>>,
-    others : Vec<String>, // e.g. comments
+    variables: Vec<String>,
+    enums: HashMap<String, Vec<String>>,
+    others: Vec<String>, // e.g. comments
 }
 
 struct RepoCodeContext {
     repo_name: String,
     languages: HashMap<String, usize>,
-    structure: Vec<FileInformation>,
-    folders : Vec<String>,
+    files: Vec<FileInformation>,
+    folders: Vec<String>,
     dependencies: Vec<CargoToml>,
 }
 
@@ -74,11 +76,12 @@ impl CargoToml {
 impl FileInformation {
     fn new(file_name: String) -> Self {
         Self {
-            file_name : file_name,
-            structs : HashMap::new(),
+            file_name: file_name,
+            structs: HashMap::new(),
             functions: HashMap::new(),
-            variables : HashMap::new(),
-            others : Vec::new(),
+            variables: Vec::new(),
+            enums: HashMap::new(),
+            others: Vec::new(),
         }
     }
 }
@@ -87,9 +90,9 @@ impl RepoCodeContext {
     fn new(repo_name: String) -> Self {
         Self {
             repo_name,
-            folders : Vec::new(),
+            folders: Vec::new(),
             languages: HashMap::new(),
-            structure: Vec::new(),
+            files: Vec::new(),
             dependencies: Vec::new(),
         }
     }
@@ -128,23 +131,88 @@ fn parse_rust_file(entry: &DirEntry) -> Option<FileInformation> {
 
     let mut file_info = FileInformation::new(file_name);
 
-    for items in syntax_tree.items { 
+    for items in syntax_tree.items {
         match items {
             syn::Item::Fn(func) => {
+                let func_name = func.sig.ident.to_string();
+                let func_vis = match func.vis {
+                    syn::Visibility::Public(_) => "public",
+                    _ => "private",
+                }
+                .to_string();
+                let func_output = match func.sig.output {
+                    syn::ReturnType::Default => "None".to_string(),
+                    syn::ReturnType::Type(_, typ) => typ.to_token_stream().to_string(),
+                };
+                let mut params: Vec<String> = Vec::new();
+                for p in func.sig.inputs.iter() {
+                    match p {
+                        syn::FnArg::Receiver(_) => params.push("self".to_string()),
+                        syn::FnArg::Typed(t) => {
+                            let p = t.pat.to_token_stream().to_string();
+                            let ty = t.ty.to_token_stream().to_string();
+                            params.push(format!("{} : {}", p, ty))
+                        }
+                    }
+                }
 
-            },
+                file_info.functions.insert(
+                    func_name,
+                    vec![
+                        format!("params: {:?}", params),
+                        format!("returns: {}", func_output),
+                        format!("visibility: {}", func_vis),
+                    ],
+                );
+            }
             syn::Item::Const(var) => {
+                let const_name = var.ident.to_string();
+                file_info.variables.push(const_name);
+            }
+            syn::Item::Enum(en) => {
+                let enum_name = en.ident.to_string();
+                let enum_fields: Vec<String> = en
+                    .enum_token
+                    .to_token_stream()
+                    .to_string()
+                    .split_whitespace()
+                    .map(String::from)
+                    .collect();
 
-            },
-            syn::Item::Enum(en) => {},
-            syn::Item::Struct(struc) => {},
-            syn::Item::Static(var) => {},
+                file_info.enums.insert(enum_name, enum_fields);
+            }
+            syn::Item::Struct(struc) => {
+                let struct_name = struc.ident.to_string();
+                let mut struct_fields: Vec<String> = Vec::new();
+
+                match struc.fields {
+                    syn::Fields::Named(named_fields) => {
+                        for field in named_fields.named {
+                            if let Some(ident) = field.ident {
+                                struct_fields.push(ident.to_string());
+                            }
+                        }
+                    }
+                    syn::Fields::Unnamed(unnamed_fields) => {
+                        for (i, field) in unnamed_fields.unnamed.into_iter().enumerate() {
+                            let field_type = field.ty.to_token_stream().to_string();
+                            struct_fields.push(format!("field{}: {}", i, field_type));
+                        }
+                    }
+                    syn::Fields::Unit => {}
+                }
+
+                file_info.structs.insert(struct_name, struct_fields);
+            }
+            syn::Item::Static(var) => {
+                let var_name = var.ident.to_string();
+                file_info.variables.push(var_name);
+            }
             _ => {}
         }
     }
 
     Some(file_info)
-    
 }
 
 /// Main traversal logic
@@ -161,7 +229,6 @@ fn walk_repo(dir_path: PathBuf) -> Result<RepoCodeContext, io::Error> {
         if entry.file_type().is_file() && !invalid_path(&entry) {
             if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
                 let lang = map_extension_to_language(ext);
-                let file_name = entry.path().file_name().unwrap().to_string_lossy().to_string();
 
                 *repo.languages.entry(lang.clone()).or_insert(0) += 1;
 
@@ -172,9 +239,15 @@ fn walk_repo(dir_path: PathBuf) -> Result<RepoCodeContext, io::Error> {
                     repo.dependencies.push(cargo_file);
                 }
 
-                let mut new_file: FileInformation = FileInformation::new(file_name.clone());
-
-            } 
+                // parse rust files
+                if ext == "rs" {
+                    if let Some(file_info) = parse_rust_file(&entry) {
+                        repo.files.push(file_info)
+                    }
+                } else {
+                    todo!()
+                }
+            }
         } else if entry.file_type().is_dir() && !invalid_path(&entry) {
             if let Some(folder_name) = entry.path().file_name().and_then(|s| s.to_str()) {
                 repo.folders.push(folder_name.to_string());
