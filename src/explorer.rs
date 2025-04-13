@@ -8,6 +8,43 @@ use std::{
 };
 use walkdir::{DirEntry, WalkDir};
 
+#[derive(Debug)]
+enum RepoError {
+    Io(io::Error),
+    Toml(toml::de::Error),
+    Syn(syn::Error),
+}
+
+impl std::fmt::Display for RepoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RepoError::Io(e) => write!(f, "IO Error: {}", e),
+            RepoError::Toml(e) => write!(f, "TOML Parse Error: {}", e),
+            RepoError::Syn(e) => write!(f, "Syntax Parse Error: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for RepoError {}
+
+impl From<io::Error> for RepoError {
+    fn from(error: io::Error) -> Self {
+        RepoError::Io(error)
+    }
+}
+
+impl From<toml::de::Error> for RepoError {
+    fn from(error: toml::de::Error) -> Self {
+        RepoError::Toml(error)
+    }
+}
+
+impl From<syn::Error> for RepoError {
+    fn from(error: syn::Error) -> Self {
+        RepoError::Syn(error)
+    }
+}
+
 /// Cargo.toml
 #[derive(Deserialize, Debug)]
 struct CargoToml {
@@ -23,19 +60,20 @@ struct CargoPackage {
     version: String,
     description: Option<String>,
 }
-/// We want this format
-/// {
-///  "functions": [
-///    { "name": "create_user", "params": ["name: string"], "returns": "User", "visibility": "public", "doc": "Creates a user" }
-///  ],
 
 struct FileInformation {
     file_name: String,
     structs: HashMap<String, Vec<String>>,
-    functions: HashMap<String, Vec<String>>,
+    functions: HashMap<String, FunctionMeta>,
     variables: Vec<String>,
     enums: HashMap<String, Vec<String>>,
     others: Vec<String>, // e.g. comments
+}
+
+struct FunctionMeta {
+    params: Vec<String>,
+    returns: String,
+    visibility: String,
 }
 
 struct RepoCodeContext {
@@ -49,34 +87,20 @@ struct RepoCodeContext {
 /// Implementation for parsing Cargo.toml
 
 impl CargoToml {
-    fn parse(file: fs::File) -> Self {
+    /// Now returns a Result rather than silently printing errors.
+    fn parse(file: File) -> Result<Self, RepoError> {
         let mut reader = BufReader::new(file);
         let mut contents = String::new();
-
-        if let Err(e) = reader.read_to_string(&mut contents) {
-            eprintln!("Error reading file: {}", e);
-            return Self {
-                package: None,
-                dependencies: None,
-                dev_dependencies: None,
-            };
-        }
-
-        toml::from_str(&contents).unwrap_or_else(|e| {
-            eprintln!("Error parsing Cargo.toml: {}", e);
-            Self {
-                package: None,
-                dependencies: None,
-                dev_dependencies: None,
-            }
-        })
+        reader.read_to_string(&mut contents)?;
+        let cargo: CargoToml = toml::from_str(&contents)?;
+        Ok(cargo)
     }
 }
 
 impl FileInformation {
     fn new(file_name: String) -> Self {
         Self {
-            file_name: file_name,
+            file_name,
             structs: HashMap::new(),
             functions: HashMap::new(),
             variables: Vec::new(),
@@ -94,6 +118,16 @@ impl RepoCodeContext {
             languages: HashMap::new(),
             files: Vec::new(),
             dependencies: Vec::new(),
+        }
+    }
+}
+
+impl FunctionMeta {
+    fn new(params: Vec<String>, visibility: String, returns: String) -> Self {
+        Self {
+            params,
+            visibility,
+            returns,
         }
     }
 }
@@ -124,15 +158,23 @@ fn map_extension_to_language(ext: &str) -> String {
     }
 }
 
-fn parse_rust_file(entry: &DirEntry) -> Option<FileInformation> {
-    let file_name = entry.path().file_name()?.to_string_lossy().to_string();
-    let src = fs::read_to_string(entry.path()).ok()?;
-    let syntax_tree: syn::File = syn::parse_str(&src).ok()?;
+/// Parse a Rust source file and collect information.
+/// Returns a Result wrapping FileInformation.
+fn parse_rust_file(entry: &DirEntry) -> Result<FileInformation, RepoError> {
+    let file_name = entry
+        .path()
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(String::from)
+        .ok_or_else(|| RepoError::Io(io::Error::new(io::ErrorKind::Other, "Invalid file name")))?;
+
+    let src = fs::read_to_string(entry.path())?;
+    let syntax_tree: syn::File = syn::parse_str(&src)?;
 
     let mut file_info = FileInformation::new(file_name);
 
-    for items in syntax_tree.items {
-        match items {
+    for item in syntax_tree.items {
+        match item {
             syn::Item::Fn(func) => {
                 let func_name = func.sig.ident.to_string();
                 let func_vis = match func.vis {
@@ -149,21 +191,15 @@ fn parse_rust_file(entry: &DirEntry) -> Option<FileInformation> {
                     match p {
                         syn::FnArg::Receiver(_) => params.push("self".to_string()),
                         syn::FnArg::Typed(t) => {
-                            let p = t.pat.to_token_stream().to_string();
+                            let pat = t.pat.to_token_stream().to_string();
                             let ty = t.ty.to_token_stream().to_string();
-                            params.push(format!("{} : {}", p, ty))
+                            params.push(format!("{} : {}", pat, ty))
                         }
                     }
                 }
 
-                file_info.functions.insert(
-                    func_name,
-                    vec![
-                        format!("params: {:?}", params),
-                        format!("returns: {}", func_output),
-                        format!("visibility: {}", func_vis),
-                    ],
-                );
+                let fn_meta = FunctionMeta::new(params, func_vis, func_output);
+                file_info.functions.insert(func_name, fn_meta);
             }
             syn::Item::Const(var) => {
                 let const_name = var.ident.to_string();
@@ -171,20 +207,13 @@ fn parse_rust_file(entry: &DirEntry) -> Option<FileInformation> {
             }
             syn::Item::Enum(en) => {
                 let enum_name = en.ident.to_string();
-                let enum_fields: Vec<String> = en
-                    .enum_token
-                    .to_token_stream()
-                    .to_string()
-                    .split_whitespace()
-                    .map(String::from)
-                    .collect();
-
+                let enum_fields: Vec<String> =
+                    en.variants.iter().map(|v| v.ident.to_string()).collect();
                 file_info.enums.insert(enum_name, enum_fields);
             }
             syn::Item::Struct(struc) => {
                 let struct_name = struc.ident.to_string();
                 let mut struct_fields: Vec<String> = Vec::new();
-
                 match struc.fields {
                     syn::Fields::Named(named_fields) => {
                         for field in named_fields.named {
@@ -201,7 +230,6 @@ fn parse_rust_file(entry: &DirEntry) -> Option<FileInformation> {
                     }
                     syn::Fields::Unit => {}
                 }
-
                 file_info.structs.insert(struct_name, struct_fields);
             }
             syn::Item::Static(var) => {
@@ -212,40 +240,41 @@ fn parse_rust_file(entry: &DirEntry) -> Option<FileInformation> {
         }
     }
 
-    Some(file_info)
+    Ok(file_info)
 }
 
-/// Main traversal logic
-
-fn walk_repo(dir_path: PathBuf) -> Result<RepoCodeContext, io::Error> {
+/// Main traversal logic that walks through a repository
+/// and gathers information. Returns a Result wrapping RepoCodeContext.
+fn walk_repo(dir_path: PathBuf) -> Result<RepoCodeContext, RepoError> {
     let repo_name = dir_path
         .file_name()
-        .unwrap_or_default()
+        .unwrap_or_default() // May be empty, but not an error in this context.
         .to_string_lossy()
         .to_string();
-    let mut repo = RepoCodeContext::new(repo_name.clone());
+    let mut repo = RepoCodeContext::new(repo_name);
 
-    for entry in WalkDir::new(dir_path).into_iter().filter_map(Result::ok) {
+    for entry in WalkDir::new(&dir_path).into_iter().filter_map(Result::ok) {
         if entry.file_type().is_file() && !invalid_path(&entry) {
             if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
                 let lang = map_extension_to_language(ext);
-
                 *repo.languages.entry(lang.clone()).or_insert(0) += 1;
 
-                // dependency file
+                // Handle dependency files
                 if is_cargo_toml(&entry) {
-                    let f = fs::File::open(entry.path()).unwrap();
-                    let cargo_file = CargoToml::parse(f);
+                    let file = File::open(entry.path())?;
+                    let cargo_file = CargoToml::parse(file)?;
                     repo.dependencies.push(cargo_file);
                 }
 
-                // parse rust files
+                // Parse Rust source files
                 if ext == "rs" {
-                    if let Some(file_info) = parse_rust_file(&entry) {
-                        repo.files.push(file_info)
-                    }
+                    let file_info = parse_rust_file(&entry)?;
+                    repo.files.push(file_info);
                 } else {
-                    todo!()
+                    todo!(
+                        "Parsing for files with extension '{}' is not implemented",
+                        ext
+                    );
                 }
             }
         } else if entry.file_type().is_dir() && !invalid_path(&entry) {
