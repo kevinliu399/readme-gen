@@ -89,7 +89,6 @@ pub struct RepoCodeContext {
 /// Implementation for parsing Cargo.toml
 
 impl CargoToml {
-    /// Now returns a Result rather than silently printing errors.
     pub fn parse(file: File) -> Result<Self, RepoError> {
         let mut reader = BufReader::new(file);
         let mut contents = String::new();
