@@ -121,7 +121,31 @@ fn map_extension_to_language(ext: &str) -> String {
     }
 }
 
-fn parse_rust_file() {}
+fn parse_rust_file(entry: &DirEntry) -> Option<FileInformation> {
+    let file_name = entry.path().file_name()?.to_string_lossy().to_string();
+    let src = fs::read_to_string(entry.path()).ok()?;
+    let syntax_tree: syn::File = syn::parse_str(&src).ok()?;
+
+    let mut file_info = FileInformation::new(file_name);
+
+    for items in syntax_tree.items { 
+        match items {
+            syn::Item::Fn(func) => {
+
+            },
+            syn::Item::Const(var) => {
+
+            },
+            syn::Item::Enum(en) => {},
+            syn::Item::Struct(struc) => {},
+            syn::Item::Static(var) => {},
+            _ => {}
+        }
+    }
+
+    Some(file_info)
+    
+}
 
 /// Main traversal logic
 
