@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::{
     collections::HashMap,
-    fs,
+    fs::{self, File},
     io::{self, BufReader, Read},
     path::PathBuf,
 };
@@ -22,18 +22,25 @@ struct CargoPackage {
     version: String,
     description: Option<String>,
 }
+/// We want this format
+/// {
+///  "functions": [
+///    { "name": "create_user", "params": ["name: string"], "returns": "User", "visibility": "public", "doc": "Creates a user" }
+///  ],
 
 struct FileInformation {
+    file_name: String,
     structs: HashMap<String, Vec<String>>,
-    function: HashMap<String, Vec<String>>,
+    functions: HashMap<String, Vec<String>>,
     variables: HashMap<String, Vec<String>>,
+    others : Vec<String>, // e.g. comments
 }
 
 struct RepoCodeContext {
     repo_name: String,
     languages: HashMap<String, usize>,
     structure: Vec<FileInformation>,
-    config_files: Vec<PathBuf>,
+    folders : Vec<String>,
     dependencies: Vec<CargoToml>,
 }
 
@@ -64,13 +71,25 @@ impl CargoToml {
     }
 }
 
+impl FileInformation {
+    fn new(file_name: String) -> Self {
+        Self {
+            file_name : file_name,
+            structs : HashMap::new(),
+            functions: HashMap::new(),
+            variables : HashMap::new(),
+            others : Vec::new(),
+        }
+    }
+}
+
 impl RepoCodeContext {
     fn new(repo_name: String) -> Self {
         Self {
             repo_name,
+            folders : Vec::new(),
             languages: HashMap::new(),
             structure: Vec::new(),
-            config_files: Vec::new(),
             dependencies: Vec::new(),
         }
     }
@@ -102,6 +121,8 @@ fn map_extension_to_language(ext: &str) -> String {
     }
 }
 
+fn parse_rust_file() {}
+
 /// Main traversal logic
 
 fn walk_repo(dir_path: PathBuf) -> Result<RepoCodeContext, io::Error> {
@@ -116,13 +137,23 @@ fn walk_repo(dir_path: PathBuf) -> Result<RepoCodeContext, io::Error> {
         if entry.file_type().is_file() && !invalid_path(&entry) {
             if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
                 let lang = map_extension_to_language(ext);
+                let file_name = entry.path().file_name().unwrap().to_string_lossy().to_string();
+
                 *repo.languages.entry(lang.clone()).or_insert(0) += 1;
 
+                // dependency file
                 if is_cargo_toml(&entry) {
                     let f = fs::File::open(entry.path()).unwrap();
                     let cargo_file = CargoToml::parse(f);
                     repo.dependencies.push(cargo_file);
                 }
+
+                let mut new_file: FileInformation = FileInformation::new(file_name.clone());
+
+            } 
+        } else if entry.file_type().is_dir() && !invalid_path(&entry) {
+            if let Some(folder_name) = entry.path().file_name().and_then(|s| s.to_str()) {
+                repo.folders.push(folder_name.to_string());
             }
         }
     }
