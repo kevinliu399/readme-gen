@@ -21,6 +21,7 @@ impl LLMInput {
 pub fn build_input(path: PathBuf) -> Result<String, Box<dyn std::error::Error>> {
     let mut llm_input = LLMInput::default();
     let repo = explorer::walk_repo(path)?;
+
     llm_input.project_name = repo.repo_name;
     llm_input.project_language = repo
         .languages
@@ -105,7 +106,7 @@ The README should include:
 - A brief description of each file and its contents
 - How to run the project
 - Any other relevant information
-The README should be in Markdown format.
+The README should be in Markdown format (but without the Markdown code block since it will be in a file)
 The README should be clear and concise.
 The README should be easy to read and understand."#
         .trim()

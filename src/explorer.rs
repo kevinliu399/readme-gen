@@ -61,21 +61,23 @@ pub struct CargoPackage {
     pub description: Option<String>,
 }
 
+#[derive(Debug)]
 pub struct FileInformation {
     pub file_name: String,
     pub structs: HashMap<String, Vec<String>>,
     pub functions: HashMap<String, FunctionMeta>,
     pub variables: Vec<String>,
     pub enums: HashMap<String, Vec<String>>,
-    pub others: Vec<String>, // e.g. comments
 }
 
+#[derive(Debug)]
 pub struct FunctionMeta {
     pub params: Vec<String>,
     pub returns: String,
     pub visibility: String,
 }
 
+#[derive(Debug)]
 pub struct RepoCodeContext {
     pub repo_name: String,
     pub languages: HashMap<String, usize>,
@@ -105,7 +107,6 @@ impl FileInformation {
             functions: HashMap::new(),
             variables: Vec::new(),
             enums: HashMap::new(),
-            others: Vec::new(),
         }
     }
 }
@@ -247,37 +248,36 @@ fn parse_rust_file(entry: &DirEntry) -> Result<FileInformation, RepoError> {
 /// and gathers information. Returns a Result wrapping RepoCodeContext.
 pub fn walk_repo(dir_path: PathBuf) -> Result<RepoCodeContext, RepoError> {
     let repo_name = dir_path
+        .canonicalize()?
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
+
     let mut repo = RepoCodeContext::new(repo_name);
 
-    for entry in WalkDir::new(&dir_path).into_iter().filter_map(Result::ok) {
-        if entry.file_type().is_file() && !invalid_path(&entry) {
+    let walker = WalkDir::new(&dir_path)
+        .into_iter()
+        .filter_entry(|e| !invalid_path(e));
+
+    for entry in walker.filter_map(Result::ok) {
+        if entry.file_type().is_file() {
             if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
                 let lang = map_extension_to_language(ext);
                 *repo.languages.entry(lang.clone()).or_insert(0) += 1;
 
-                // Handle dependency files
                 if is_cargo_toml(&entry) {
                     let file = File::open(entry.path())?;
                     let cargo_file = CargoToml::parse(file)?;
                     repo.dependencies.push(cargo_file);
                 }
 
-                // Parse Rust source files
                 if ext == "rs" {
                     let file_info = parse_rust_file(&entry)?;
                     repo.files.push(file_info);
-                } else {
-                    todo!(
-                        "Parsing for files with extension '{}' is not implemented",
-                        ext
-                    );
                 }
             }
-        } else if entry.file_type().is_dir() && !invalid_path(&entry) {
+        } else if entry.file_type().is_dir() {
             if let Some(folder_name) = entry.path().file_name().and_then(|s| s.to_str()) {
                 repo.folders.push(folder_name.to_string());
             }
